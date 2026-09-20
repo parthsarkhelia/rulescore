@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
+	"strconv"
 	"strings"
 )
 
@@ -94,6 +96,21 @@ type Result struct {
 //     rationals (math/big), never by converting through float64. A
 //     json.Number rule value of 9007199254740993 is therefore greater than a
 //     record value of 9007199254740992, a distinction float64 cannot represent.
+//
+//     A float64 record value is compared as the decimal literal it came from,
+//     not as the binary float it is stored as: it is taken at its shortest
+//     representation that round-trips (strconv.FormatFloat with precision -1),
+//     which is the literal json.Unmarshal parsed. A record's 0.1 therefore
+//     equals a rule's json.Number("0.1"), even though the nearest float64 to
+//     0.1 is slightly above one tenth. The two record representations agree:
+//     the same JSON document scores the same whether it was decoded with
+//     json.Unmarshal or with UseNumber.
+//
+//     Precision a float64 record never carried cannot be recovered. A record
+//     literal of 9007199254740993 arrives as float64 9007199254740992 and is
+//     compared as that value; decode records with UseNumber to preserve
+//     integers beyond 2^53.
+//
 //     A record number that is NaN or ±Inf cannot be ordered and is reported as
 //     an evaluation error.
 //
@@ -104,16 +121,27 @@ type Result struct {
 //     is missing fields scores lower rather than being quietly rescaled. If the
 //     total weight is zero — an empty ruleset, or one whose weights are all
 //     zero — no rule can contribute anything and Score is 0, never NaN.
+//
+//     The weights are summed as exact rationals, so no ruleset of finite
+//     weights can overflow the total to ±Inf and turn Score into NaN or 0.
+//     A weight that is not itself a finite, non-negative number makes its rule
+//     unevaluable: it is reported in that rule's RuleResult.Err and left out of
+//     both sums, since no such weight has a share of a total. Decode rejects
+//     negative weights and JSON cannot express NaN or ±Inf, so this can only
+//     arise from a hand-built Ruleset. Score is therefore always in [0, 1].
 func (rs Ruleset) Evaluate(record map[string]any) Result {
 	results := make([]RuleResult, 0, len(rs.Rules))
-	var totalWeight, matchedWeight float64
+	totalWeight, matchedWeight := new(big.Rat), new(big.Rat)
 
 	for _, rule := range rs.Rules {
-		totalWeight += rule.Weight
-
-		matched, err := evaluateRule(rule, record)
-		if matched {
-			matchedWeight += rule.Weight
+		var matched bool
+		weight, err := ruleWeight(rule.Weight)
+		if err == nil {
+			totalWeight.Add(totalWeight, weight)
+			matched, err = evaluateRule(rule, record)
+			if matched {
+				matchedWeight.Add(matchedWeight, weight)
+			}
 		}
 		results = append(results, RuleResult{
 			ID:      rule.ID,
@@ -124,10 +152,24 @@ func (rs Ruleset) Evaluate(record map[string]any) Result {
 	}
 
 	score := 0.0
-	if totalWeight > 0 {
-		score = matchedWeight / totalWeight
+	if totalWeight.Sign() > 0 {
+		// matchedWeight <= totalWeight and both are non-negative, so the
+		// quotient is in [0, 1] and Float64 cannot report Inf or NaN.
+		score, _ = new(big.Rat).Quo(matchedWeight, totalWeight).Float64()
 	}
 	return Result{Score: score, Rules: results}
+}
+
+// ruleWeight converts a declared weight to an exact rational, rejecting the
+// weights that have no share of a total (decision 5).
+func ruleWeight(weight float64) (*big.Rat, error) {
+	// SetFloat64 is exact for every finite float64 and returns nil for NaN and
+	// ±Inf.
+	rat := new(big.Rat).SetFloat64(weight)
+	if rat == nil || rat.Sign() < 0 {
+		return nil, fmt.Errorf("weight %v: must be a finite, non-negative number", weight)
+	}
+	return rat, nil
 }
 
 // evaluateRule applies one rule to a record, reporting whether it matched or
@@ -235,11 +277,18 @@ func toRat(got any) (*big.Rat, error) {
 		return rat, nil
 
 	case float64:
-		// SetFloat64 is exact for every finite float64 and returns nil for NaN
-		// and ±Inf, which have no place in an ordering.
-		rat := new(big.Rat).SetFloat64(got)
-		if rat == nil {
+		if math.IsNaN(got) || math.IsInf(got, 0) {
 			return nil, fmt.Errorf("record value %v is not a finite number", got)
+		}
+		// Take the float at its shortest round-tripping decimal rather than at
+		// its exact binary value, so that a record decoded by json.Unmarshal
+		// and one decoded with UseNumber compare identically: the nearest
+		// float64 to 0.1 is just above one tenth, and comparing that binary
+		// value against a rule's exact json.Number("0.1") would report the
+		// record as greater (decision 4).
+		rat, ok := new(big.Rat).SetString(strconv.FormatFloat(got, 'g', -1, 64))
+		if !ok {
+			return nil, fmt.Errorf("record value %v is not a valid number", got)
 		}
 		return rat, nil
 

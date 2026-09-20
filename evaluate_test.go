@@ -374,3 +374,151 @@ func TestEvaluateDecodedRuleset(t *testing.T) {
 		t.Errorf("breakdown = %+v, want age_ok and verified matched, enabled not", got.Rules)
 	}
 }
+
+// TestEvaluateFloat64AndJSONNumberAgree pins that the same JSON literal means
+// the same number whether the record was decoded by plain json.Unmarshal (which
+// yields float64) or with UseNumber (which yields json.Number). Fractional
+// literals are the interesting case: their nearest float64 is not the decimal
+// value, so a comparison that used the raw binary float would report a
+// record's 0.1 as greater than a rule's 0.1.
+func TestEvaluateFloat64AndJSONNumberAgree(t *testing.T) {
+	t.Parallel()
+
+	literals := []string{
+		"0.1", "0.3", "2.675", "1.005", "-0.7", "0.07", // not exactly representable
+		"18", "3.5", "0", // exactly representable
+		"1e+308", "1e-300", "5e-324", // extremes, exercised in exponent form
+	}
+
+	for _, literal := range literals {
+		t.Run(literal, func(t *testing.T) {
+			t.Parallel()
+
+			var record map[string]any
+			if err := json.Unmarshal([]byte(`{"n":`+literal+`}`), &record); err != nil {
+				t.Fatalf("Unmarshal() error = %v", err)
+			}
+			if _, ok := record["n"].(float64); !ok {
+				t.Fatalf("record value is %T, want float64", record["n"])
+			}
+
+			// The same literal on the rule side, as Decode would produce it.
+			value := json.Number(literal)
+			for op, want := range map[Operator]bool{
+				OperatorEqual:              true,
+				OperatorNotEqual:           false,
+				OperatorGreaterThan:        false,
+				OperatorLessThan:           false,
+				OperatorGreaterThanOrEqual: true,
+				OperatorLessThanOrEqual:    true,
+			} {
+				got := rule(op, "n", value).Evaluate(record)
+				if got.Rules[0].Err != nil {
+					t.Fatalf("%s: Err = %v, want nil", op, got.Rules[0].Err)
+				}
+				if got.Rules[0].Matched != want {
+					t.Errorf("%s: Matched = %v, want %v (float64 record %v vs rule %q)",
+						op, got.Rules[0].Matched, want, record["n"], literal)
+				}
+			}
+		})
+	}
+}
+
+// TestEvaluateWeightSumDoesNotOverflow pins Result.Score's documented [0, 1]
+// range for weights whose float64 sum would overflow to +Inf.
+func TestEvaluateWeightSumDoesNotOverflow(t *testing.T) {
+	t.Parallel()
+
+	const huge = 1e308 // 2*huge overflows float64
+
+	tests := []struct {
+		name      string
+		record    map[string]any
+		wantScore float64
+	}{
+		{
+			name:      "both rules match",
+			record:    map[string]any{"a": "x", "b": "x"},
+			wantScore: 1,
+		},
+		{
+			name:      "one rule matches",
+			record:    map[string]any{"a": "x", "b": "other"},
+			wantScore: 0.5,
+		},
+		{
+			name:      "no rule matches",
+			record:    map[string]any{"a": "other", "b": "other"},
+			wantScore: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rs := Ruleset{Version: 1, Rules: []Rule{
+				{ID: "a", Field: "a", Op: OperatorEqual, Value: "x", Weight: huge},
+				{ID: "b", Field: "b", Op: OperatorEqual, Value: "x", Weight: huge},
+			}}
+
+			got := rs.Evaluate(tc.record)
+			if math.IsNaN(got.Score) {
+				t.Fatalf("Score = NaN, want %v", tc.wantScore)
+			}
+			if got.Score != tc.wantScore {
+				t.Errorf("Score = %v, want %v", got.Score, tc.wantScore)
+			}
+		})
+	}
+}
+
+// TestEvaluateRejectsUnusableWeights covers weights Decode cannot produce but a
+// hand-built Ruleset can, and which would otherwise push Score outside [0, 1].
+func TestEvaluateRejectsUnusableWeights(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		weight    float64
+		wantScore float64
+	}{
+		{name: "negative weight", weight: -1, wantScore: 1},
+		{name: "NaN weight", weight: math.NaN(), wantScore: 1},
+		{name: "infinite weight", weight: math.Inf(1), wantScore: 1},
+		{name: "usable weight", weight: 1, wantScore: 0.5},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// "bad" never matches, so a weight that counted would drag Score
+			// below 1; an unusable weight is excluded from the total instead.
+			rs := Ruleset{Version: 1, Rules: []Rule{
+				{ID: "good", Field: "tier", Op: OperatorEqual, Value: "gold", Weight: 1},
+				{ID: "bad", Field: "tier", Op: OperatorEqual, Value: "silver", Weight: tc.weight},
+			}}
+
+			got := rs.Evaluate(map[string]any{"tier": "gold"})
+			if got.Score != tc.wantScore {
+				t.Errorf("Score = %v, want %v", got.Score, tc.wantScore)
+			}
+			if got.Rules[0].Err != nil {
+				t.Errorf("usable rule: Err = %v, want nil", got.Rules[0].Err)
+			}
+
+			unusable := tc.wantScore == 1
+			if unusable && got.Rules[1].Err == nil {
+				t.Errorf("weight %v: Err = nil, want an evaluation error", tc.weight)
+			}
+			if !unusable && got.Rules[1].Err != nil {
+				t.Errorf("weight %v: Err = %v, want nil", tc.weight, got.Rules[1].Err)
+			}
+			if got.Rules[1].Weight != tc.weight && !math.IsNaN(tc.weight) {
+				t.Errorf("breakdown weight = %v, want the declared %v", got.Rules[1].Weight, tc.weight)
+			}
+		})
+	}
+}
