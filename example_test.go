@@ -2,7 +2,9 @@ package rulescore_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 
 	"github.com/parthsarkhelia/rulescore"
 )
@@ -109,4 +111,52 @@ func ExampleEncode() {
 
 	// Output:
 	// {"version":1,"rules":[{"id":"big","field":"id","op":"gt","value":9007199254740993,"weight":1.5}]}
+}
+
+// ExampleRuleset_Evaluate_nonFiniteRecordValue shows that a NaN or infinite
+// record number is a per-rule evaluation error, but not one of the exported
+// sentinels: errors.Is finds nothing to match it against.
+func ExampleRuleset_Evaluate_nonFiniteRecordValue() {
+	ruleset := rulescore.Ruleset{
+		Version: 1,
+		Rules: []rulescore.Rule{
+			{ID: "high", Field: "score", Op: rulescore.OperatorGreaterThan, Value: json.Number("10"), Weight: 1},
+		},
+	}
+
+	err := ruleset.Evaluate(map[string]any{"score": math.NaN()}).Rules[0].Err
+	fmt.Println(err)
+	fmt.Println("is ErrNotOrdered: ", errors.Is(err, rulescore.ErrNotOrdered))
+	fmt.Println("is ErrTypeMismatch:", errors.Is(err, rulescore.ErrTypeMismatch))
+
+	// Output:
+	// field "score": record value NaN is not a finite number
+	// is ErrNotOrdered:  false
+	// is ErrTypeMismatch: false
+}
+
+// ExampleRuleset_Evaluate_unusableWeight shows the one exception to "the
+// denominator is every rule": a weight that is not a finite, non-negative
+// number leaves its rule out of both sums. Decode rejects negative weights and
+// JSON cannot express NaN or Inf, so this only arises from a hand-built
+// Ruleset.
+func ExampleRuleset_Evaluate_unusableWeight() {
+	ruleset := rulescore.Ruleset{
+		Version: 1,
+		Rules: []rulescore.Rule{
+			{ID: "pro", Field: "tier", Op: rulescore.OperatorEqual, Value: "pro", Weight: 1},
+			{ID: "negative", Field: "tier", Op: rulescore.OperatorEqual, Value: "free", Weight: -1},
+		},
+	}
+
+	result := ruleset.Evaluate(map[string]any{"tier": "pro"})
+	fmt.Printf("score: %.2f\n", result.Score)
+	for _, rule := range result.Rules {
+		fmt.Printf("%-9s matched=%-5t err=%v\n", rule.ID, rule.Matched, rule.Err)
+	}
+
+	// Output:
+	// score: 1.00
+	// pro       matched=true  err=<nil>
+	// negative  matched=false err=weight -1: must be a finite, non-negative number
 }

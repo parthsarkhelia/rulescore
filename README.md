@@ -29,10 +29,23 @@ A ruleset is a version and a list of rules:
 }
 ```
 
-`version` must be `1`. Every rule needs a unique non-empty `id`, a non-empty
-`field`, a known `op`, a `value` that is a number, string, or bool, and a
-non-negative `weight`. `Decode` rejects anything else and names the rule and
-field at fault.
+`version` is required and must be `1`. For each rule present, `Decode` rejects
+an empty or duplicate `id`, an empty `field`, an unknown `op`, a `value` that
+is not a number, string, or bool, and a negative `weight`, naming the rule and
+field at fault. It also rejects trailing content after the ruleset object.
+
+`Decode` is not schema-strict, and the gaps are worth knowing:
+
+- **Unknown keys are ignored.** `DisallowUnknownFields` is not set, so a
+  misspelled key is silently dropped rather than reported.
+- **An omitted `weight` decodes as `0`.** Zero is a valid weight, so a rule
+  that misspells `weight` decodes successfully and then contributes nothing to
+  any score.
+- **An omitted `rules` key decodes as an empty ruleset**, which evaluates every
+  record to a score of `0`.
+
+So `Decode` will tell you that a rule you wrote is wrong; it will not tell you
+that a key you meant to write is missing.
 
 ## Quickstart
 
@@ -119,7 +132,8 @@ nor discards the rest of the score.
 | Field absent from the record | `Err: ErrFieldMissing` |
 | Record and rule values are different kinds | `Err: ErrTypeMismatch` |
 | Ordering operator applied to a bool | `Err: ErrNotOrdered` |
-| Record number is NaN or ±Inf | `Err: ErrNotOrdered` |
+| Record number is NaN or ±Inf | `Err` set, no sentinel |
+| Rule weight is negative, NaN, or ±Inf | `Err` set, no sentinel |
 
 Two choices here are deliberate and worth knowing before you write rules:
 
@@ -130,15 +144,20 @@ Two choices here are deliberate and worth knowing before you write rules:
   Cross-kind values are never equal, but answering "not equal" would hide a
   ruleset or record authoring bug behind a plausible-looking score.
 
-Errors are wrapped with context, so test them with `errors.Is`, not `==`.
-A rule that could not be evaluated is always `Matched: false` and contributes
-nothing. If your caller must not absorb bad records silently, reject any
-`Result` containing a non-nil `Err`.
+The three sentinels above are wrapped with context, so test them with
+`errors.Is`, not `==`. The last two rows carry no sentinel at all: a NaN record
+number reports `field "score": record value NaN is not a finite number`, and
+`errors.Is` against `ErrNotOrdered` and `ErrTypeMismatch` is false for it. Match
+those cases by checking `Err != nil`, not by sentinel.
+
+A rule that could not be evaluated is always `Matched: false`. If your caller
+must not absorb bad records silently, reject any `Result` containing a non-nil
+`Err`.
 
 ## What the score means
 
 `Score` is the sum of the weights of the matched rules divided by the sum of
-the weights of *every* rule in the ruleset — matched, unmatched, and
+the weights of every rule whose weight is usable — matched, unmatched, and
 unevaluable alike.
 
 The denominator depends only on the ruleset, so the same ruleset scores every
@@ -146,6 +165,13 @@ record on the same scale, and a record missing half its fields scores lower
 rather than being quietly rescaled against the rules it did answer. Weights are
 summed as exact rationals, so the total cannot overflow to ±Inf. If the total
 weight is zero, `Score` is `0`, never NaN. `Score` is always in `[0, 1]`.
+
+The one exception: a weight that is not a finite, non-negative number is not a
+share of any total, so that rule is left out of **both** sums, not just the
+numerator. A ruleset of one matched `weight: 1` rule and one unmatched
+`weight: -1` rule scores `1.00`, not `0.50`. `Decode` rejects negative weights
+and JSON cannot express NaN or ±Inf, so this only reaches `Evaluate` from a
+hand-built `Ruleset`. It is shown in `ExampleRuleset_Evaluate_unusableWeight`.
 
 ## Writing rulesets back out
 
