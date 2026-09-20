@@ -3,14 +3,16 @@
 // was reached.
 //
 // A ruleset has a schema version and an ordered list of rules. Each rule names
-// a flat record field, one of the operators eq, ne, gt, gte, lt, or lte, a
-// JSON number, string, or bool to compare against, and a non-negative weight:
+// a top-level record field, one of the operators eq, ne, gt, gte, lt, or lte, a
+// JSON number, string, or bool to compare against, and a non-negative weight.
+// The README works one example through in full: comparing flats to rent, where
+// the criteria are the ruleset and each listing is a record.
 //
 //	{
 //	  "version": 1,
 //	  "rules": [
-//	    {"id":"adult", "field":"age", "op":"gte", "value":18, "weight":2},
-//	    {"id":"eu", "field":"region", "op":"eq", "value":"eu", "weight":1}
+//	    {"id":"rent", "field":"rent_pcm", "op":"lte", "value":1500, "weight":4},
+//	    {"id":"pets", "field":"pets_allowed", "op":"eq", "value":true, "weight":2}
 //	  ]
 //	}
 //
@@ -24,7 +26,7 @@
 //	    return err
 //	}
 //
-//	result := rs.Evaluate(map[string]any{"age": 31.0, "region": "eu"})
+//	result := rs.Evaluate(map[string]any{"rent_pcm": 1400.0, "pets_allowed": true})
 //	for _, rule := range result.Rules {
 //	    // Inspect rule.Matched and rule.Err.
 //	}
