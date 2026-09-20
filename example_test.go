@@ -9,18 +9,24 @@ import (
 	"github.com/parthsarkhelia/rulescore"
 )
 
-// Example shows the whole library: decode a ruleset, evaluate a record against
-// it, and read both the score and the per-rule breakdown that explains it.
+// Example shows the whole library on one worked problem: you are comparing
+// flats to rent, so your criteria become a ruleset and each listing becomes a
+// record. Decode the ruleset, evaluate one listing against it, and read both
+// the score and the per-rule breakdown that explains it.
 //
-// The record has no "region" key, so that rule is reported as an evaluation
-// error rather than as a non-match, and contributes nothing to the score.
+// The listing has no "pets_allowed" key, so that rule is reported as an
+// evaluation error rather than as a non-match: "pets are not allowed" and
+// "the listing does not say" are different answers. It contributes nothing to
+// the score either way.
 func Example() {
 	rulesetJSON := []byte(`{
   "version": 1,
   "rules": [
-    {"id": "adult",    "field": "age",      "op": "gte", "value": 18,   "weight": 2},
-    {"id": "verified", "field": "verified", "op": "eq",  "value": true, "weight": 2},
-    {"id": "eu",       "field": "region",   "op": "eq",  "value": "eu", "weight": 1}
+    {"id": "rent",      "field": "rent_pcm",      "op": "lte", "value": 1500,        "weight": 4},
+    {"id": "commute",   "field": "km_to_work",    "op": "lte", "value": 5,           "weight": 2},
+    {"id": "pets",      "field": "pets_allowed",  "op": "eq",  "value": true,        "weight": 2},
+    {"id": "area",      "field": "neighbourhood", "op": "eq",  "value": "Southbank", "weight": 1},
+    {"id": "furnished", "field": "furnished",     "op": "eq",  "value": true,        "weight": 1}
   ]
 }`)
 
@@ -30,26 +36,33 @@ func Example() {
 		return
 	}
 
-	record := map[string]any{"age": 31.0, "verified": true}
+	record := map[string]any{
+		"rent_pcm":      1400.0,
+		"km_to_work":    9.0,
+		"neighbourhood": "Southbank",
+		"furnished":     true,
+	}
 
 	result := ruleset.Evaluate(record)
 	fmt.Printf("score: %.2f\n", result.Score)
 	for _, rule := range result.Rules {
 		switch {
 		case rule.Err != nil:
-			fmt.Printf("%-8s error   %v\n", rule.ID, rule.Err)
+			fmt.Printf("%-9s error   %v\n", rule.ID, rule.Err)
 		case rule.Matched:
-			fmt.Printf("%-8s matched weight %g\n", rule.ID, rule.Weight)
+			fmt.Printf("%-9s matched weight %g\n", rule.ID, rule.Weight)
 		default:
-			fmt.Printf("%-8s no match\n", rule.ID)
+			fmt.Printf("%-9s no match\n", rule.ID)
 		}
 	}
 
 	// Output:
-	// score: 0.80
-	// adult    matched weight 2
-	// verified matched weight 2
-	// eu       error   field "region": field missing from record
+	// score: 0.60
+	// rent      matched weight 4
+	// commute   no match
+	// pets      error   field "pets_allowed": field missing from record
+	// area      matched weight 1
+	// furnished matched weight 1
 }
 
 // ExampleDecode shows that a ruleset is validated, not merely parsed: Decode

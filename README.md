@@ -5,8 +5,8 @@ A small Go library for evaluating weighted scoring rules declared in JSON.
 You write a ruleset as JSON — a list of independent comparisons, each with a
 weight. `rulescore` decodes and validates it, evaluates it against a record,
 and returns a score in `[0, 1]` plus a per-rule breakdown explaining how that
-score was reached. No DSL, no reflection, no dependencies outside the standard
-library.
+score was reached. No DSL, no code generation, no dependencies outside the
+standard library.
 
 ```
 go get github.com/parthsarkhelia/rulescore
@@ -14,27 +14,199 @@ go get github.com/parthsarkhelia/rulescore
 
 Requires Go 1.25 or later.
 
-## The ruleset
+## Concepts
 
-A ruleset is a version and a list of rules:
+If you have not used a scoring engine before, read this before the quickstart.
+The library is one small idea, and the idea is easier to meet than the API.
+
+### A choice you already know how to make
+
+You are looking for a flat to rent, and three are on offer. The cheap one is a
+long way from work, and its listing says nothing about pets — and you have a
+cat. The one around the corner is over budget. The third is affordable and
+close, but it is in the wrong part of town and comes unfurnished.
+
+Nobody needs a program for three flats. But you already know how you would
+settle it: write down what you want, admit that some of it matters more to you
+than the rest, check each flat against the list, and prefer the flat that ticks
+more of what matters. Everything below is that habit, written down so a program
+can apply it to three flats or three thousand.
+
+### The words for it
+
+**One flat, written down.** A flat is a handful of facts you can look up: the
+rent, the distance to work, the neighbourhood, whether pets are allowed,
+whether it comes furnished. Written as data, that is a **record** — a plain bag
+of named facts, where each name is a **field**. Here is the cheap flat, and
+notice that its listing never mentioned pets, so the record has no such field
+at all:
+
+```
+rent_pcm       1400
+km_to_work     9
+neighbourhood  "Southbank"
+furnished      true
+```
+
+Each field holds a number, a piece of text, or a yes/no. Nothing nested,
+nothing computed.
+
+**One thing you want.** "Rent of at most 1500 a month" is a claim about one
+field that is either true or false of a given flat. Writing it down takes three
+parts: the **field** to look at (`rent_pcm`), the **operator** — which kind of
+comparison to make (at most) — and the **value** to compare against (`1500`).
+That is a **rule**. There are six operators and they are the obvious ones:
+equal, not equal, greater than, less than, and the two or-equal forms.
+
+**Your whole list.** Your rules together are a **ruleset**: your criteria in
+one object, ready to apply to any flat.
+
+**What matters more.** Rent matters more to you than furnishing does — you
+would buy a sofa before you would pay the over-budget flat's extra 250 a month.
+So each rule carries a **weight**, a non-negative number saying how much that
+rule counts.
+Only the ratios matter: rent at `4` and furnished at `1` says rent is worth
+four furnishings to you.
+
+**Checking one flat.** Apply the ruleset to a record and each rule either holds
+or it does not. A rule that holds is a **match** and its weight counts towards
+that flat; a rule that does not hold contributes nothing.
+
+**The verdict.** The **score** is the weight you matched divided by the weight
+you were offering — the sum of every rule's weight. It therefore lands between
+`0` and `1`, and because the divisor comes from the ruleset alone, every flat
+is measured on the same scale:
+
+| Flat | `rent_pcm` | `km_to_work` | `pets_allowed` | `neighbourhood` | `furnished` | Score |
+|------|-----------|-------------|---------------|----------------|------------|-------|
+| Rosewood Court | 1400 | 9 | *not stated* | Southbank | true | `0.60` |
+| Harbour View | 1750 | 2 | true | Southbank | false | `0.50` |
+| Elm Row | 1450 | 4 | true | Elmfield | false | `0.80` |
+
+**Why, not just how much.** `0.60` on its own tells you nothing you can act on.
+So alongside the score you get a **breakdown**: one entry per rule, in the
+order you wrote them, saying whether that rule matched and what its weight was.
+For Rosewood Court it reads, in that order: the rent rule matched (`4`), the
+commute rule did not (`2`), the pets rule could not be checked at all, the
+neighbourhood rule matched (`1`), and the furnished rule matched (`1`). That
+middle entry is the point of the breakdown: the listing has no `pets_allowed`
+field, so the rule has nothing to compare. "This flat does not take pets" and
+"nobody said" are different answers, and a bare `0.60` hides both behind the
+same missing weight.
+
+### The same list as JSON
 
 ```json
 {
   "version": 1,
   "rules": [
-    {"id": "adult",    "field": "age",      "op": "gte", "value": 18,   "weight": 2},
-    {"id": "verified", "field": "verified", "op": "eq",  "value": true, "weight": 2},
-    {"id": "eu",       "field": "region",   "op": "eq",  "value": "eu", "weight": 1}
+    {"id": "rent",      "field": "rent_pcm",      "op": "lte", "value": 1500,        "weight": 4},
+    {"id": "commute",   "field": "km_to_work",    "op": "lte", "value": 5,           "weight": 2},
+    {"id": "pets",      "field": "pets_allowed",  "op": "eq",  "value": true,        "weight": 2},
+    {"id": "area",      "field": "neighbourhood", "op": "eq",  "value": "Southbank", "weight": 1},
+    {"id": "furnished", "field": "furnished",     "op": "eq",  "value": true,        "weight": 1}
   ]
 }
 ```
 
+Two things in there are the library's own bookkeeping rather than part of the
+idea. `version` says which ruleset schema the document follows, and today the
+only accepted value is `1`. Each rule's `id` is the short name that rule is
+reported under in the breakdown — `rent`, `commute`, `pets`, `area`,
+`furnished` — so it has to be unique within the ruleset.
+
+## Quickstart
+
+The same list in Go, scored against the Rosewood Court listing. This is the
+body of the `Example` function in
+[`example_test.go`](example_test.go), so CI verifies its output on every push to `main` and on every pull request.
+
+<!-- rulescore-example:quickstart -->
+```go
+rulesetJSON := []byte(`{
+  "version": 1,
+  "rules": [
+    {"id": "rent",      "field": "rent_pcm",      "op": "lte", "value": 1500,        "weight": 4},
+    {"id": "commute",   "field": "km_to_work",    "op": "lte", "value": 5,           "weight": 2},
+    {"id": "pets",      "field": "pets_allowed",  "op": "eq",  "value": true,        "weight": 2},
+    {"id": "area",      "field": "neighbourhood", "op": "eq",  "value": "Southbank", "weight": 1},
+    {"id": "furnished", "field": "furnished",     "op": "eq",  "value": true,        "weight": 1}
+  ]
+}`)
+
+ruleset, err := rulescore.Decode(rulesetJSON)
+if err != nil {
+	fmt.Println("decode:", err)
+	return
+}
+
+record := map[string]any{
+	"rent_pcm":      1400.0,
+	"km_to_work":    9.0,
+	"neighbourhood": "Southbank",
+	"furnished":     true,
+}
+
+result := ruleset.Evaluate(record)
+fmt.Printf("score: %.2f\n", result.Score)
+for _, rule := range result.Rules {
+	switch {
+	case rule.Err != nil:
+		fmt.Printf("%-9s error   %v\n", rule.ID, rule.Err)
+	case rule.Matched:
+		fmt.Printf("%-9s matched weight %g\n", rule.ID, rule.Weight)
+	default:
+		fmt.Printf("%-9s no match\n", rule.ID)
+	}
+}
+```
+
+<!-- rulescore-example:output -->
+```
+score: 0.60
+rent      matched weight 4
+commute   no match
+pets      error   field "pets_allowed": field missing from record
+area      matched weight 1
+furnished matched weight 1
+```
+
+The record is the shape `json.Unmarshal` produces for a JSON object. Numbers
+may arrive as `float64` (plain `Unmarshal`) or `json.Number` (`Unmarshal` with
+`UseNumber`); both are accepted and both score identically. Other Go numeric
+types — `int`, `float32` — are not recognised as numbers.
+
+## What the library adds to the bare idea
+
+Four things, each of them an answer to a question the flat hunt raises on its
+own.
+
+- **A typo is not a criterion.** Write `"weigth": 4` and you have not said how
+  much rent matters — you have said nothing. `Decode` fails with
+  `unknown field "weigth"` rather than scoring every flat against a rule that
+  could never contribute; leaving `weight` out entirely is an error too, not a
+  default. See [The ruleset](#the-ruleset).
+- **A broken rule and an incomplete listing are different faults.** Rosewood
+  Court's missing `pets_allowed` is the listing's problem; `"op": "under"` is
+  yours. Each per-rule failure is classified, so you can reject records you do
+  not trust without also swallowing your own mistakes. See
+  [What counts as an error](#what-counts-as-an-error).
+- **1500 means 1500.** Numbers are compared as exact decimals, not through
+  `float64`, so a rent of exactly `1500` is at most `1500` and a rule written
+  `0.1` matches a record's `0.1`. See [Operators](#operators).
+- **The number is not the answer.** `Evaluate` returns the breakdown next to
+  the score, accounting for every rule including the ones it could not
+  evaluate, so a `0.60` can always be explained. See
+  [What the score means](#what-the-score-means).
+
+## The ruleset
+
 `version` and `rules` are both required, and `version` must be `1`. Every rule
 must carry all five of `id`, `field`, `op`, `value` and `weight`, and `Decode`
 rejects an empty or duplicate `id`, an empty `field`, an unknown `op`, a
-`value` that is not a number, string, or bool, and a negative `weight`, naming
-the rule and field at fault. It also rejects trailing content after the
-ruleset object.
+`value` that is not a number, string or bool, and a negative `weight`, naming
+the rule and field at fault. It also rejects trailing content after the ruleset
+object.
 
 `Decode` is schema-strict: a ruleset that does not say what it meant is an
 error, never a quietly defaulted value.
@@ -53,57 +225,6 @@ This strictness arrived in v0.3.0 and is a breaking change: rulesets with an
 unknown key at either level, with a rule that omits `weight`, or with no
 `rules` key at all used to decode and now fail. `Encode` is unaffected —
 everything it emits still decodes, unchanged.
-
-## Quickstart
-
-This is the body of the `Example` function in
-[`example_test.go`](example_test.go), so CI verifies its output on every push to `main` and on every pull request.
-
-<!-- rulescore-example:quickstart -->
-```go
-rulesetJSON := []byte(`{
-  "version": 1,
-  "rules": [
-    {"id": "adult",    "field": "age",      "op": "gte", "value": 18,   "weight": 2},
-    {"id": "verified", "field": "verified", "op": "eq",  "value": true, "weight": 2},
-    {"id": "eu",       "field": "region",   "op": "eq",  "value": "eu", "weight": 1}
-  ]
-}`)
-
-ruleset, err := rulescore.Decode(rulesetJSON)
-if err != nil {
-	fmt.Println("decode:", err)
-	return
-}
-
-record := map[string]any{"age": 31.0, "verified": true}
-
-result := ruleset.Evaluate(record)
-fmt.Printf("score: %.2f\n", result.Score)
-for _, rule := range result.Rules {
-	switch {
-	case rule.Err != nil:
-		fmt.Printf("%-8s error   %v\n", rule.ID, rule.Err)
-	case rule.Matched:
-		fmt.Printf("%-8s matched weight %g\n", rule.ID, rule.Weight)
-	default:
-		fmt.Printf("%-8s no match\n", rule.ID)
-	}
-}
-```
-
-<!-- rulescore-example:output -->
-```
-score: 0.80
-adult    matched weight 2
-verified matched weight 2
-eu       error   field "region": field missing from record
-```
-
-The record is the shape `json.Unmarshal` produces for a JSON object. Numbers
-may arrive as `float64` (plain `Unmarshal`) or `json.Number` (`Unmarshal` with
-`UseNumber`); both are accepted and both score identically. Other Go numeric
-types — `int`, `float32` — are not recognised as numbers.
 
 ## Operators
 
@@ -208,7 +329,7 @@ coerced if it is anything else.
 These are real and unlikely to change soon. If any of them is a problem for
 you, this is not the library you want.
 
-- **`field` is a flat key.** Nested paths such as `user.address.city` are not
+- **`field` is a top-level key.** Nested paths such as `user.address.city` are not
   supported. The field name is looked up directly in the record map.
 - **Six comparison operators only.** There is no `in`, `contains`, `matches`,
   or `exists`.
