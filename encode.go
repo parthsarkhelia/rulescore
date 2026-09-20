@@ -18,6 +18,10 @@ import (
 // order, whether Rules is nil or non-nil, each Value's dynamic type, and the
 // exact decimal text held by json.Number.
 //
+// Encode also rejects values Go can represent but JSON cannot round-trip:
+// invalid UTF-8 in string fields, malformed json.Number text, and NaN or
+// infinite weights. Each error identifies the offending rule and field.
+//
 // The returned JSON is byte-stable for a given Ruleset across calls and
 // processes. Struct fields have a fixed order, rules retain declaration order,
 // and Rule.Value cannot contain maps or other values with variable ordering.

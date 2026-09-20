@@ -183,7 +183,11 @@ func TestEncodeRejectsInvalidRulesets(t *testing.T) {
 			wantParts: []string{`rule "age_ok"`, `field "weight"`, "must be finite"},
 		},
 		{
-			name: "infinite weight", ruleset: Ruleset{Version: 1, Rules: []Rule{{ID: "age_ok", Field: "age", Op: OperatorEqual, Value: json.Number("18"), Weight: math.Inf(1)}}},
+			name: "positive infinite weight", ruleset: Ruleset{Version: 1, Rules: []Rule{{ID: "age_ok", Field: "age", Op: OperatorEqual, Value: json.Number("18"), Weight: math.Inf(1)}}},
+			wantParts: []string{`rule "age_ok"`, `field "weight"`, "must be finite"},
+		},
+		{
+			name: "negative infinite weight", ruleset: Ruleset{Version: 1, Rules: []Rule{{ID: "age_ok", Field: "age", Op: OperatorEqual, Value: json.Number("18"), Weight: math.Inf(-1)}}},
 			wantParts: []string{`rule "age_ok"`, `field "weight"`, "must be finite"},
 		},
 	}
