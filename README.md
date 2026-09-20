@@ -59,6 +59,7 @@ everything it emits still decodes, unchanged.
 This is the body of the `Example` function in
 [`example_test.go`](example_test.go), so CI verifies its output on every push to `main` and on every pull request.
 
+<!-- rulescore-example:quickstart -->
 ```go
 rulesetJSON := []byte(`{
   "version": 1,
@@ -91,6 +92,7 @@ for _, rule := range result.Rules {
 }
 ```
 
+<!-- rulescore-example:output -->
 ```
 score: 0.80
 adult    matched weight 2
