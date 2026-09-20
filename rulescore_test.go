@@ -85,6 +85,26 @@ func TestDecodeRejectsInvalidRulesets(t *testing.T) {
 			input:     `{"version":1,"rules":[{"id":"age_ok","field":"age","op":"gte","value":{"minimum":18},"weight":1}]}`,
 			wantParts: []string{`rule "age_ok"`, `field "value"`, "must be a number, string, or bool"},
 		},
+		{
+			name:      "unknown ruleset key",
+			input:     `{"version":1,"rules":[],"ruels":[]}`,
+			wantParts: []string{"decode ruleset", `unknown field "ruels"`},
+		},
+		{
+			name:      "unknown rule key",
+			input:     `{"version":1,"rules":[{"id":"age_ok","field":"age","op":"gte","value":18,"weight":1,"weigth":0.5}]}`,
+			wantParts: []string{"decode ruleset", `unknown field "weigth"`},
+		},
+		{
+			name:      "missing rules",
+			input:     `{"version":1}`,
+			wantParts: []string{`ruleset field "rules"`, "is required"},
+		},
+		{
+			name:      "missing weight",
+			input:     `{"version":1,"rules":[{"id":"age_ok","field":"age","op":"gte","value":18}]}`,
+			wantParts: []string{`rule "age_ok"`, `field "weight"`, "is required"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -128,5 +148,36 @@ func TestRulesetJSONRoundTripPreservesNumbers(t *testing.T) {
 	}
 	if !reflect.DeepEqual(second, first) {
 		t.Fatalf("round trip = %#v, want %#v", second, first)
+	}
+}
+
+// TestDecodeAcceptsEmptyRulesets checks the other side of the required "rules"
+// key: an explicit empty ruleset is a statement, not a typo, and null keeps
+// decoding to the nil slice Encode emits for one.
+func TestDecodeAcceptsEmptyRulesets(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  []Rule
+	}{
+		{name: "explicit empty array", input: `{"version":1,"rules":[]}`, want: []Rule{}},
+		{name: "explicit null", input: `{"version":1,"rules":null}`, want: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := Decode([]byte(tt.input))
+			if err != nil {
+				t.Fatalf("Decode() error = %v", err)
+			}
+			// DeepEqual distinguishes a nil slice from an allocated empty one.
+			if !reflect.DeepEqual(got, Ruleset{Version: 1, Rules: tt.want}) {
+				t.Fatalf("Decode() = %#v, want rules %#v", got, tt.want)
+			}
+		})
 	}
 }

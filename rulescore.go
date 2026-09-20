@@ -49,14 +49,30 @@ type Ruleset struct {
 }
 
 // Decode parses and validates one JSON ruleset.
+//
+// Decode is schema-strict: a ruleset that does not say what it meant is an
+// error, never a quietly defaulted value.
+//
+//   - Unknown keys are rejected, on the ruleset object and on every rule, so a
+//     misspelled "weigth" is reported instead of dropped. The error names the
+//     offending key; the standard library does not report which rule carried
+//     it.
+//   - "version" and "rules" are both required. A missing "rules" key is a
+//     typo, so it is rejected; an explicit [] or null is an empty ruleset,
+//     which is legitimate and scores every record 0.
+//   - Every rule must carry every key: "id", "field", "op", "value" and
+//     "weight". "weight" has no default, because a rule that contributes
+//     nothing to any score is not a rule anyone meant to write. An explicit
+//     "weight": 0 remains valid.
+//
+// Decode accepts everything Encode produces, so a ruleset still round-trips.
 func Decode(data []byte) (Ruleset, error) {
 	var encoded struct {
-		Version *int   `json:"version"`
-		Rules   []Rule `json:"rules"`
+		Version *int            `json:"version"`
+		Rules   json.RawMessage `json:"rules"`
 	}
 
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
+	decoder := strictDecoder(data)
 	if err := decoder.Decode(&encoded); err != nil {
 		return Ruleset{}, fmt.Errorf("decode ruleset: %w", err)
 	}
@@ -70,10 +86,26 @@ func Decode(data []byte) (Ruleset, error) {
 	if *encoded.Version != 1 {
 		return Ruleset{}, fmt.Errorf("ruleset field %q: unsupported version %d", "version", *encoded.Version)
 	}
+	// An absent key leaves the raw message empty, while an explicit null keeps
+	// its four bytes and decodes to a nil rule slice, as Encode emits for one.
+	if len(encoded.Rules) == 0 {
+		return Ruleset{}, fmt.Errorf("ruleset field %q: is required", "rules")
+	}
 
-	seen := make(map[string]struct{}, len(encoded.Rules))
-	for i := range encoded.Rules {
-		rule := &encoded.Rules[i]
+	// The outer decoder captured the rules verbatim, so they need a strict pass
+	// of their own rather than inheriting the outer one's.
+	var decoded []encodedRule
+	if err := strictDecoder(encoded.Rules).Decode(&decoded); err != nil {
+		return Ruleset{}, fmt.Errorf("decode ruleset: %w", err)
+	}
+
+	var rules []Rule
+	if decoded != nil {
+		rules = make([]Rule, 0, len(decoded))
+	}
+	seen := make(map[string]struct{}, len(decoded))
+	for i := range decoded {
+		rule := &decoded[i]
 		if rule.ID == "" {
 			return Ruleset{}, ruleError("<empty>", "id", "must not be empty")
 		}
@@ -91,12 +123,40 @@ func Decode(data []byte) (Ruleset, error) {
 		if !validValue(rule.Value) {
 			return Ruleset{}, ruleError(rule.ID, "value", "must be a number, string, or bool")
 		}
-		if rule.Weight < 0 {
+		if rule.Weight == nil {
+			return Ruleset{}, ruleError(rule.ID, "weight", "is required")
+		}
+		if *rule.Weight < 0 {
 			return Ruleset{}, ruleError(rule.ID, "weight", "must not be negative")
 		}
+
+		rules = append(rules, Rule{
+			ID:     rule.ID,
+			Field:  rule.Field,
+			Op:     rule.Op,
+			Value:  rule.Value,
+			Weight: *rule.Weight,
+		})
 	}
 
-	return Ruleset{Version: *encoded.Version, Rules: encoded.Rules}, nil
+	return Ruleset{Version: *encoded.Version, Rules: rules}, nil
+}
+
+// encodedRule mirrors Rule with a pointer weight, so that an omitted "weight"
+// stays distinguishable from an explicit 0.
+type encodedRule struct {
+	ID     string   `json:"id"`
+	Field  string   `json:"field"`
+	Op     Operator `json:"op"`
+	Value  any      `json:"value"`
+	Weight *float64 `json:"weight"`
+}
+
+func strictDecoder(data []byte) *json.Decoder {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
+	return decoder
 }
 
 func (op Operator) valid() bool {
