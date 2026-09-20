@@ -22,8 +22,9 @@ The library is one small idea, and the idea is easier to meet than the API.
 ### A choice you already know how to make
 
 You are looking for a flat to rent, and three are on offer. The cheap one is a
-long way from work. The one around the corner is over budget. The third would
-suit you, but its listing says nothing about pets — and you have a cat.
+long way from work, and its listing says nothing about pets — and you have a
+cat. The one around the corner is over budget. The third is affordable and
+close, but it is in the wrong part of town and comes unfurnished.
 
 Nobody needs a program for three flats. But you already know how you would
 settle it: write down what you want, admit that some of it matters more to you
@@ -36,7 +37,9 @@ can apply it to three flats or three thousand.
 **One flat, written down.** A flat is a handful of facts you can look up: the
 rent, the distance to work, the neighbourhood, whether pets are allowed,
 whether it comes furnished. Written as data, that is a **record** — a plain bag
-of named facts, where each name is a **field**:
+of named facts, where each name is a **field**. Here is the cheap flat, and
+notice that its listing never mentioned pets, so the record has no such field
+at all:
 
 ```
 rent_pcm       1400
@@ -59,8 +62,9 @@ equal, not equal, greater than, less than, and the two or-equal forms.
 one object, ready to apply to any flat.
 
 **What matters more.** Rent matters more to you than furnishing does — you
-would buy a sofa before you would pay an extra 300 a month. So each rule
-carries a **weight**, a non-negative number saying how much that rule counts.
+would buy a sofa before you would pay the over-budget flat's extra 250 a month.
+So each rule carries a **weight**, a non-negative number saying how much that
+rule counts.
 Only the ratios matter: rent at `4` and furnished at `1` says rent is worth
 four furnishings to you.
 
@@ -82,10 +86,11 @@ is measured on the same scale:
 **Why, not just how much.** `0.60` on its own tells you nothing you can act on.
 So alongside the score you get a **breakdown**: one entry per rule, in the
 order you wrote them, saying whether that rule matched and what its weight was.
-For Rosewood Court it reads: rent matched (`4`), commute did not (`2`),
-neighbourhood matched (`1`), furnished matched (`1`) — and pets could not be
-checked at all, because the listing has no `pets_allowed` field. That last
-distinction is the point of the breakdown. "This flat does not take pets" and
+For Rosewood Court it reads, in that order: the rent rule matched (`4`), the
+commute rule did not (`2`), the pets rule could not be checked at all, the
+neighbourhood rule matched (`1`), and the furnished rule matched (`1`). That
+middle entry is the point of the breakdown: the listing has no `pets_allowed`
+field, so the rule has nothing to compare. "This flat does not take pets" and
 "nobody said" are different answers, and a bare `0.60` hides both behind the
 same missing weight.
 
@@ -106,8 +111,9 @@ same missing weight.
 
 Two things in there are the library's own bookkeeping rather than part of the
 idea. `version` says which ruleset schema the document follows, and today the
-only accepted value is `1`. Each rule's `id` is the name that rule is reported
-under in the breakdown, so it has to be unique within the ruleset.
+only accepted value is `1`. Each rule's `id` is the short name that rule is
+reported under in the breakdown — `rent`, `commute`, `pets`, `area`,
+`furnished` — so it has to be unique within the ruleset.
 
 ## Quickstart
 
