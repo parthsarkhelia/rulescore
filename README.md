@@ -126,14 +126,23 @@ with `UseNumber` if you need integers beyond 2^53.
 recorded in that rule's `RuleResult.Err`, so a single bad rule neither panics
 nor discards the rest of the score.
 
-| Situation | Result |
-|-----------|--------|
-| Comparison performed, did not hold | `Matched: false`, `Err: nil` |
-| Field absent from the record | `Err: ErrFieldMissing` |
-| Record and rule values are different kinds | `Err: ErrTypeMismatch` |
-| Ordering operator applied to a bool | `Err: ErrNotOrdered` |
-| Record number is NaN or ±Inf | `Err` set, no sentinel |
-| Rule weight is negative, NaN, or ±Inf | `Err` set, no sentinel |
+| Situation | `errors.Is` classification |
+|-----------|----------------------------|
+| Comparison performed, did not hold | `Err == nil` |
+| Field absent from the record | `ErrFieldMissing` |
+| Record and rule values are different kinds | `ErrTypeMismatch` |
+| Hand-built rule has an unsupported value type | `ErrTypeMismatch` |
+| Ordering operator applied to a bool | `ErrNotOrdered` |
+| Hand-built rule has an unknown operator | `ErrInvalidRule` |
+| Hand-built rule has a malformed `json.Number` value | `ErrInvalidRule` |
+| Rule weight is negative, NaN, or ±Inf | `ErrInvalidRule` |
+| Record has a malformed `json.Number` value | `ErrInvalidRecord` |
+| Record number is NaN or ±Inf | `ErrInvalidRecord` |
+| A finite `float64` cannot be parsed from its formatted decimal | `ErrInvalidRecord` |
+
+The last row is a defensive path: the standard library's `FormatFloat`
+currently guarantees a valid decimal for every finite `float64`, but the path
+is still classified if that invariant ever changes.
 
 Two choices here are deliberate and worth knowing before you write rules:
 
@@ -144,11 +153,12 @@ Two choices here are deliberate and worth knowing before you write rules:
   Cross-kind values are never equal, but answering "not equal" would hide a
   ruleset or record authoring bug behind a plausible-looking score.
 
-The three sentinels above are wrapped with context, so test them with
-`errors.Is`, not `==`. The last two rows carry no sentinel at all: a NaN record
-number reports `field "score": record value NaN is not a finite number`, and
-`errors.Is` against `ErrNotOrdered` and `ErrTypeMismatch` is false for it. Match
-those cases by checking `Err != nil`, not by sentinel.
+Every non-nil `RuleResult.Err` wraps exactly one of the five sentinels above,
+so test it with `errors.Is`, not `==`. `ErrInvalidRule` groups defects in a
+hand-built ruleset that `Decode` would reject; `ErrInvalidRecord` groups
+malformed or non-finite numeric input. For example, a NaN record number still
+reports `field "score": record value NaN is not a finite number`, and
+`errors.Is(err, ErrInvalidRecord)` is true.
 
 A rule that could not be evaluated is always `Matched: false`. If your caller
 must not absorb bad records silently, reject any `Result` containing a non-nil

@@ -114,8 +114,8 @@ func ExampleEncode() {
 }
 
 // ExampleRuleset_Evaluate_nonFiniteRecordValue shows that a NaN or infinite
-// record number is a per-rule evaluation error, but not one of the exported
-// sentinels: errors.Is finds nothing to match it against.
+// record number is a per-rule evaluation error classified as invalid record
+// data rather than as a defect in the rule.
 func ExampleRuleset_Evaluate_nonFiniteRecordValue() {
 	ruleset := rulescore.Ruleset{
 		Version: 1,
@@ -126,13 +126,13 @@ func ExampleRuleset_Evaluate_nonFiniteRecordValue() {
 
 	err := ruleset.Evaluate(map[string]any{"score": math.NaN()}).Rules[0].Err
 	fmt.Println(err)
-	fmt.Println("is ErrNotOrdered: ", errors.Is(err, rulescore.ErrNotOrdered))
-	fmt.Println("is ErrTypeMismatch:", errors.Is(err, rulescore.ErrTypeMismatch))
+	fmt.Println("is ErrInvalidRecord:", errors.Is(err, rulescore.ErrInvalidRecord))
+	fmt.Println("is ErrInvalidRule:  ", errors.Is(err, rulescore.ErrInvalidRule))
 
 	// Output:
 	// field "score": record value NaN is not a finite number
-	// is ErrNotOrdered:  false
-	// is ErrTypeMismatch: false
+	// is ErrInvalidRecord: true
+	// is ErrInvalidRule:   false
 }
 
 // ExampleRuleset_Evaluate_unusableWeight shows the one exception to "the

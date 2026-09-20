@@ -25,7 +25,30 @@ var (
 	// applied to a type rulescore does not order. Only numbers and strings are
 	// ordered; see Evaluate.
 	ErrNotOrdered = errors.New("type does not support ordering")
+
+	// ErrInvalidRule reports that a hand-built rule has an unusable operator,
+	// numeric value, or weight. Decode rejects these defects before evaluation.
+	ErrInvalidRule = errors.New("invalid rule")
+
+	// ErrInvalidRecord reports that a record contains a malformed or non-finite
+	// numeric value.
+	ErrInvalidRecord = errors.New("invalid record")
 )
+
+// classifiedError preserves an established error message while adding a
+// sentinel to its error chain.
+type classifiedError struct {
+	error
+	class error
+}
+
+func (err classifiedError) Unwrap() error {
+	return err.class
+}
+
+func classify(err, class error) error {
+	return classifiedError{error: err, class: class}
+}
 
 // RuleResult records how one rule was accounted for in a Result.
 type RuleResult struct {
@@ -71,7 +94,12 @@ type Result struct {
 // recorded in that rule's RuleResult.Err, so one unevaluable rule neither
 // panics nor discards the score of the rules around it.
 //
-// The five comparison decisions this package settles:
+// Every non-nil RuleResult.Err wraps one of ErrFieldMissing, ErrTypeMismatch,
+// ErrNotOrdered, ErrInvalidRule, or ErrInvalidRecord. The first three describe
+// comparison failures, ErrInvalidRule identifies a defect in a hand-built
+// ruleset, and ErrInvalidRecord identifies unusable numeric input.
+//
+// The six comparison decisions this package settles:
 //
 //  1. Missing field. A rule whose field is absent from the record is an
 //     evaluation error (ErrFieldMissing), not a silent non-match. An absent
@@ -84,7 +112,9 @@ type Result struct {
 //     against string, either against a number — is an evaluation error
 //     (ErrTypeMismatch) for every operator, "eq" and "ne" included. Cross-kind
 //     values are never equal, but reporting "not equal" would hide a ruleset or
-//     record authoring bug behind a plausible-looking score.
+//     record authoring bug behind a plausible-looking score. A hand-built rule
+//     whose Value is not a json.Number, string, or bool is classified the same
+//     way, preserving ErrTypeMismatch for unsupported rule value types.
 //
 //  3. Ordering on non-numerics. Strings are ordered lexicographically by byte,
 //     which is Go's native string ordering and orders the common case of
@@ -111,10 +141,15 @@ type Result struct {
 //     compared as that value; decode records with UseNumber to preserve
 //     integers beyond 2^53.
 //
-//     A record number that is NaN or ±Inf cannot be ordered and is reported as
-//     an evaluation error.
+//     A malformed json.Number record value, or a float64 record value that is
+//     NaN or ±Inf, cannot be compared and is reported as ErrInvalidRecord.
 //
-//  5. Score shape. Score is the sum of the weights of the matched rules divided
+//  5. Hand-built ruleset defects. Decode rejects unknown operators, malformed
+//     numeric rule values, and unusable weights. A Ruleset assembled directly
+//     can still contain them, so Evaluate reports each as ErrInvalidRule rather
+//     than panicking or silently treating it as a non-match.
+//
+//  6. Score shape. Score is the sum of the weights of the matched rules divided
 //     by the sum of the weights of all rules in the ruleset, matched, unmatched
 //     and unevaluable alike. The denominator depends only on the ruleset, so
 //     the same ruleset scores every record on the same scale, and a record that
@@ -125,10 +160,11 @@ type Result struct {
 //     The weights are summed as exact rationals, so no ruleset of finite
 //     weights can overflow the total to ±Inf and turn Score into NaN or 0.
 //     A weight that is not itself a finite, non-negative number makes its rule
-//     unevaluable: it is reported in that rule's RuleResult.Err and left out of
-//     both sums, since no such weight has a share of a total. Decode rejects
-//     negative weights and JSON cannot express NaN or ±Inf, so this can only
-//     arise from a hand-built Ruleset. Score is therefore always in [0, 1].
+//     unevaluable: it is reported as ErrInvalidRule in that rule's
+//     RuleResult.Err and left out of both sums, since no such weight has a share
+//     of a total. Decode rejects negative weights and JSON cannot express NaN
+//     or ±Inf, so this can only arise from a hand-built Ruleset. Score is
+//     therefore always in [0, 1].
 func (rs Ruleset) Evaluate(record map[string]any) Result {
 	results := make([]RuleResult, 0, len(rs.Rules))
 	totalWeight, matchedWeight := new(big.Rat), new(big.Rat)
@@ -167,7 +203,10 @@ func ruleWeight(weight float64) (*big.Rat, error) {
 	// ±Inf.
 	rat := new(big.Rat).SetFloat64(weight)
 	if rat == nil || rat.Sign() < 0 {
-		return nil, fmt.Errorf("weight %v: must be a finite, non-negative number", weight)
+		return nil, classify(
+			fmt.Errorf("weight %v: must be a finite, non-negative number", weight),
+			ErrInvalidRule,
+		)
 	}
 	return rat, nil
 }
@@ -207,7 +246,10 @@ func evaluateRule(rule Rule, record map[string]any) (bool, error) {
 	default:
 		// Decode rejects unknown operators, but a hand-built Ruleset can carry
 		// one — including the empty Operator. Report it instead of comparing.
-		return false, fmt.Errorf("field %q: unknown operator %q", rule.Field, rule.Op)
+		return false, classify(
+			fmt.Errorf("field %q: unknown operator %q", rule.Field, rule.Op),
+			ErrInvalidRule,
+		)
 	}
 }
 
@@ -241,7 +283,10 @@ func compareValues(got, want any) (int, error) {
 		}
 		wantNum, ok := new(big.Rat).SetString(want.String())
 		if !ok {
-			return 0, fmt.Errorf("rule value %q is not a valid number", want.String())
+			return 0, classify(
+				fmt.Errorf("rule value %q is not a valid number", want.String()),
+				ErrInvalidRule,
+			)
 		}
 		return gotNum.Cmp(wantNum), nil
 
@@ -272,13 +317,19 @@ func toRat(got any) (*big.Rat, error) {
 	case json.Number:
 		rat, ok := new(big.Rat).SetString(got.String())
 		if !ok {
-			return nil, fmt.Errorf("record value %q is not a valid number", got.String())
+			return nil, classify(
+				fmt.Errorf("record value %q is not a valid number", got.String()),
+				ErrInvalidRecord,
+			)
 		}
 		return rat, nil
 
 	case float64:
 		if math.IsNaN(got) || math.IsInf(got, 0) {
-			return nil, fmt.Errorf("record value %v is not a finite number", got)
+			return nil, classify(
+				fmt.Errorf("record value %v is not a finite number", got),
+				ErrInvalidRecord,
+			)
 		}
 		// Take the float at its shortest round-tripping decimal rather than at
 		// its exact binary value, so that a record decoded by json.Unmarshal
@@ -286,15 +337,25 @@ func toRat(got any) (*big.Rat, error) {
 		// float64 to 0.1 is just above one tenth, and comparing that binary
 		// value against a rule's exact json.Number("0.1") would report the
 		// record as greater (decision 4).
-		rat, ok := new(big.Rat).SetString(strconv.FormatFloat(got, 'g', -1, 64))
-		if !ok {
-			return nil, fmt.Errorf("record value %v is not a valid number", got)
-		}
-		return rat, nil
+		return floatRat(got, strconv.FormatFloat(got, 'g', -1, 64))
 
 	default:
 		return nil, fmt.Errorf("record value is %T, want number: %w", got, ErrTypeMismatch)
 	}
+}
+
+// floatRat parses the shortest round-tripping decimal for a finite float64.
+// The text parameter keeps the defensive parse-failure branch directly
+// testable even though strconv.FormatFloat always returns a valid decimal.
+func floatRat(got float64, text string) (*big.Rat, error) {
+	rat, ok := new(big.Rat).SetString(text)
+	if !ok {
+		return nil, classify(
+			fmt.Errorf("record value %v is not a valid number", got),
+			ErrInvalidRecord,
+		)
+	}
+	return rat, nil
 }
 
 func typeMismatch(got, want any) error {

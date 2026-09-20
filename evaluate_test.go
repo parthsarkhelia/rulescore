@@ -136,13 +136,13 @@ func TestEvaluateRuleOutcomes(t *testing.T) {
 			name:    "NaN cannot be ordered",
 			ruleset: rule(OperatorGreaterThan, "score", json.Number("1")),
 			record:  map[string]any{"score": math.NaN()},
-			wantErr: true,
+			wantErr: true, wantErrIs: ErrInvalidRecord,
 		},
 		{
 			name:    "infinity cannot be ordered",
 			ruleset: rule(OperatorGreaterThan, "score", json.Number("1")),
 			record:  map[string]any{"score": math.Inf(1)},
-			wantErr: true,
+			wantErr: true, wantErrIs: ErrInvalidRecord,
 		},
 
 		// Operator validity on a hand-built ruleset.
@@ -150,7 +150,7 @@ func TestEvaluateRuleOutcomes(t *testing.T) {
 			name:    "unknown operator is reported",
 			ruleset: rule(Operator("contains"), "tier", "gold"),
 			record:  map[string]any{"tier": "gold"},
-			wantErr: true,
+			wantErr: true, wantErrIs: ErrInvalidRule,
 		},
 	}
 
@@ -186,6 +186,99 @@ func TestEvaluateRuleOutcomes(t *testing.T) {
 				t.Errorf("Score = %v, want %v", got.Score, wantScore)
 			}
 		})
+	}
+}
+
+// TestEvaluateClassifiesEveryRuleAndRecordFailure pins the sentinel and the
+// established message for every path newly classified by Evaluate.
+func TestEvaluateClassifiesEveryRuleAndRecordFailure(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		ruleset     Ruleset
+		record      map[string]any
+		wantErrIs   error
+		wantNotIs   error
+		wantMessage string
+	}{
+		{
+			name: "unusable rule weight",
+			ruleset: Ruleset{Version: 1, Rules: []Rule{
+				{ID: "r", Field: "tier", Op: OperatorEqual, Value: "gold", Weight: -1},
+			}},
+			record:      map[string]any{"tier": "gold"},
+			wantErrIs:   ErrInvalidRule,
+			wantNotIs:   ErrInvalidRecord,
+			wantMessage: "weight -1: must be a finite, non-negative number",
+		},
+		{
+			name:        "unknown rule operator",
+			ruleset:     rule(Operator("contains"), "tier", "gold"),
+			record:      map[string]any{"tier": "gold"},
+			wantErrIs:   ErrInvalidRule,
+			wantNotIs:   ErrInvalidRecord,
+			wantMessage: `field "tier": unknown operator "contains"`,
+		},
+		{
+			name:        "malformed rule number",
+			ruleset:     rule(OperatorEqual, "score", json.Number("not-a-number")),
+			record:      map[string]any{"score": float64(1)},
+			wantErrIs:   ErrInvalidRule,
+			wantNotIs:   ErrInvalidRecord,
+			wantMessage: `field "score": rule value "not-a-number" is not a valid number`,
+		},
+		{
+			name:        "malformed record number",
+			ruleset:     rule(OperatorEqual, "score", json.Number("1")),
+			record:      map[string]any{"score": json.Number("not-a-number")},
+			wantErrIs:   ErrInvalidRecord,
+			wantNotIs:   ErrInvalidRule,
+			wantMessage: `field "score": record value "not-a-number" is not a valid number`,
+		},
+		{
+			name:        "non-finite record number",
+			ruleset:     rule(OperatorEqual, "score", json.Number("1")),
+			record:      map[string]any{"score": math.NaN()},
+			wantErrIs:   ErrInvalidRecord,
+			wantNotIs:   ErrInvalidRule,
+			wantMessage: `field "score": record value NaN is not a finite number`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tc.ruleset.Evaluate(tc.record).Rules[0].Err
+			if !errors.Is(err, tc.wantErrIs) {
+				t.Errorf("Err = %v, want errors.Is(_, %v)", err, tc.wantErrIs)
+			}
+			if errors.Is(err, tc.wantNotIs) {
+				t.Errorf("Err = %v, unexpectedly errors.Is(_, %v)", err, tc.wantNotIs)
+			}
+			if err == nil || err.Error() != tc.wantMessage {
+				t.Errorf("Err = %v, want %q", err, tc.wantMessage)
+			}
+		})
+	}
+}
+
+// TestFloatRatClassifiesDefensiveParseFailure covers the defensive branch
+// behind finite float64 conversion. strconv.FormatFloat cannot trigger it, so
+// the parser accepts its formatted text separately for direct verification.
+func TestFloatRatClassifiesDefensiveParseFailure(t *testing.T) {
+	t.Parallel()
+
+	_, err := floatRat(1, "not-a-number")
+	if !errors.Is(err, ErrInvalidRecord) {
+		t.Errorf("Err = %v, want errors.Is(_, %v)", err, ErrInvalidRecord)
+	}
+	if errors.Is(err, ErrInvalidRule) {
+		t.Errorf("Err = %v, unexpectedly errors.Is(_, %v)", err, ErrInvalidRule)
+	}
+	if got, want := err.Error(), "record value 1 is not a valid number"; got != want {
+		t.Errorf("Err = %q, want %q", got, want)
 	}
 }
 
