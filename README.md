@@ -29,23 +29,30 @@ A ruleset is a version and a list of rules:
 }
 ```
 
-`version` is required and must be `1`. For each rule present, `Decode` rejects
-an empty or duplicate `id`, an empty `field`, an unknown `op`, a `value` that
-is not a number, string, or bool, and a negative `weight`, naming the rule and
-field at fault. It also rejects trailing content after the ruleset object.
+`version` and `rules` are both required, and `version` must be `1`. Every rule
+must carry all five of `id`, `field`, `op`, `value` and `weight`, and `Decode`
+rejects an empty or duplicate `id`, an empty `field`, an unknown `op`, a
+`value` that is not a number, string, or bool, and a negative `weight`, naming
+the rule and field at fault. It also rejects trailing content after the
+ruleset object.
 
-`Decode` is not schema-strict, and the gaps are worth knowing:
+`Decode` is schema-strict: a ruleset that does not say what it meant is an
+error, never a quietly defaulted value.
 
-- **Unknown keys are ignored.** `DisallowUnknownFields` is not set, so a
-  misspelled key is silently dropped rather than reported.
-- **An omitted `weight` decodes as `0`.** Zero is a valid weight, so a rule
-  that misspells `weight` decodes successfully and then contributes nothing to
-  any score.
-- **An omitted `rules` key decodes as an empty ruleset**, which evaluates every
-  record to a score of `0`.
+- **Unknown keys are rejected**, on the ruleset object and on every rule, so
+  `"weigth": 0.5` is reported instead of dropped. The error names the offending
+  key; the standard library does not report which rule carried it.
+- **`weight` has no default.** A rule that contributes nothing to any score is
+  not a rule anyone meant to write, so an omitted `weight` is an error. An
+  explicit `"weight": 0` is still valid.
+- **A missing `rules` key is an error**, while an explicit `[]` or `null` is an
+  empty ruleset — legitimate, and scoring every record `0`. A missing key is a
+  typo; an empty list is a statement.
 
-So `Decode` will tell you that a rule you wrote is wrong; it will not tell you
-that a key you meant to write is missing.
+This strictness arrived in v0.3.0 and is a breaking change: rulesets with an
+unknown key at either level, with a rule that omits `weight`, or with no
+`rules` key at all used to decode and now fail. `Encode` is unaffected —
+everything it emits still decodes, unchanged.
 
 ## Quickstart
 
