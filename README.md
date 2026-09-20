@@ -50,7 +50,7 @@ that a key you meant to write is missing.
 ## Quickstart
 
 This is the body of the `Example` function in
-[`example_test.go`](example_test.go), so CI verifies its output on every push.
+[`example_test.go`](example_test.go), so CI verifies its output on every push to `main` and on every pull request.
 
 ```go
 rulesetJSON := []byte(`{
