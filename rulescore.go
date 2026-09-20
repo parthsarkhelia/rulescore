@@ -1,4 +1,3 @@
-// Package rulescore defines JSON-backed weighted scoring rules.
 package rulescore
 
 import (
