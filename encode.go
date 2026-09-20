@@ -82,8 +82,12 @@ func validateRulesetForEncode(rs Ruleset) error {
 func validateValueForEncode(value any) error {
 	switch value := value.(type) {
 	case json.Number:
-		// Marshal validates JSON-number grammar without converting through
-		// float64, so successful numbers retain their literal decimal text.
+		// encoding/json treats an empty json.Number as zero instead of rejecting
+		// it. Reject that lossy special case first; Marshal validates every
+		// non-empty value's JSON-number grammar without converting via float64.
+		if value == "" {
+			return fmt.Errorf("must be a valid JSON number: empty text")
+		}
 		if _, err := json.Marshal(value); err != nil {
 			return fmt.Errorf("must be a valid JSON number: %w", err)
 		}

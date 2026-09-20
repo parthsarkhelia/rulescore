@@ -107,6 +107,7 @@ func TestEncodeRejectsUnencodableValues(t *testing.T) {
 		{name: "nil is not emitted", value: nil, want: "got <nil>"},
 		{name: "struct is not emitted", value: struct{ Minimum int }{18}, want: "got struct"},
 		{name: "slice is not emitted", value: []string{"active"}, want: "got []string"},
+		{name: "empty json number", value: json.Number(""), want: "must be a valid JSON number"},
 		{name: "malformed json number", value: json.Number("01"), want: "must be a valid JSON number"},
 		{name: "invalid UTF-8 string", value: string([]byte{0xff}), want: "must contain valid UTF-8"},
 	}
@@ -161,7 +162,7 @@ func TestEncodeRejectsInvalidRulesets(t *testing.T) {
 			ruleset: Ruleset{Version: 1, Rules: []Rule{{
 				ID: string([]byte{0xff}), Field: "age", Op: OperatorEqual, Value: json.Number("18"), Weight: 1,
 			}}},
-			wantParts: []string{`field "id"`, "must contain valid UTF-8"},
+			wantParts: []string{`rule "\xff"`, `field "id"`, "must contain valid UTF-8"},
 		},
 		{
 			name: "invalid UTF-8 field",
