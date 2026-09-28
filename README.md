@@ -339,7 +339,25 @@ you, this is not the library you want.
   value; you cannot call your own code from a rule.
 - **The API is not stable yet.** Expect breaking changes before v1.
 
-There are no benchmarks in this repository, so it makes no performance claims.
+
+## Performance
+
+Measured with `go test -run '^$' -bench=. -benchmem`, Go 1.27, Apple M4 Pro.
+The fixture cycles through every operator and value kind, and about half its
+rules match. Median of three runs:
+
+| Rules | Decode | Evaluate | Evaluate allocations |
+|---:|---:|---:|---:|
+| 10 | 7.7 µs | 3.0 µs | 200 |
+| 100 | 67 µs | 29 µs | 1,910 |
+| 1,000 | 664 µs | 311 µs | 19,407 |
+
+Both scale linearly with the number of rules. Evaluate allocates about 19
+times per rule, because weights and values are compared as exact rationals
+(`math/big`). That is the price of exact decimal comparison; see
+[#2](https://github.com/parthsarkhelia/rulescore/issues/2) for reducing it.
+Numbers on your hardware will differ; CI runs the benchmarks on every change
+but does not gate on them.
 
 ## Documentation
 
